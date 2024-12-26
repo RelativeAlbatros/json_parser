@@ -60,54 +60,55 @@ Token get_next_token(const char* input) {
 	char buffer[5];
 	int c;
 
-	int d = strlen(input);
-	while (lexer_index < strlen(input)) {
-		switch (c = input[lexer_index]) {
-		case '\"':
-			lexer_index++;
-			return parse_string(input);
-		case '{':
-			lexer_index++;
-			return (Token){TOKEN_CURL_OPEN, strdup("{")};
-		case '}':
-			lexer_index++;
-			return (Token){TOKEN_CURL_CLOSE, strdup("}")};
-		case '[':
-			lexer_index++;
-			return (Token){TOKEN_BRACKET_OPEN, strdup("[")};
-		case ']':
-			lexer_index++;
-			return (Token){TOKEN_BRACKET_CLOSE, strdup("]")};
-		case ',':
-			lexer_index++;
-			return (Token){TOKEN_COMMA, strdup(",")};
-		case ':':
-			lexer_index++;
-			return (Token){TOKEN_COLON, strdup(":")};
-		case '\0':
-			lexer_index++;
-			return (Token){TOKEN_EOF, NULL};
-		default:
-			strncpy(buffer, input+lexer_index, 5);
-			if (!strncmp(buffer, "true", 4)) {
-				lexer_index += 4;
-				return (Token){TOKEN_TRUE, strdup("true")};
-			} else if (!strncmp(buffer, "false", 5)) {
-				lexer_index += 5;
-				return (Token){TOKEN_FALSE, strdup("false")};
-			} else if (!strncmp(buffer, "null", 4)) {
-				lexer_index += 4;
-				return (Token){TOKEN_NULL, strdup("null")};
-			} else if (isdigit(c) || c == '-') {
-				return parse_number(input);
-			} else if (c == ' ' || c == '\t') {
-				lexer_index++;
-				continue;
-			} else if (c == '\n') {
-				return (Token){TOKEN_NL, NULL};
-			} else {
-				return (Token){TOKEN_ERR, NULL};
-			}
+	if (lexer_index >= strlen(input)) {
+		return (Token){TOKEN_EOF, NULL};
+	}
+	// skip spaces and tabs
+	while (input[lexer_index] == ' ' || input[lexer_index] == '\t') {
+		lexer_index++;
+	}
+	switch (c = input[lexer_index]) {
+	case '\"':
+		lexer_index++;
+		return parse_string(input);
+	case '{':
+		lexer_index++;
+		return (Token){TOKEN_CURL_OPEN, strdup("{")};
+	case '}':
+		lexer_index++;
+		return (Token){TOKEN_CURL_CLOSE, strdup("}")};
+	case '[':
+		lexer_index++;
+		return (Token){TOKEN_BRACKET_OPEN, strdup("[")};
+	case ']':
+		lexer_index++;
+		return (Token){TOKEN_BRACKET_CLOSE, strdup("]")};
+	case ',':
+		lexer_index++;
+		return (Token){TOKEN_COMMA, strdup(",")};
+	case ':':
+		lexer_index++;
+		return (Token){TOKEN_COLON, strdup(":")};
+	case '\0':
+		lexer_index++;
+		return (Token){TOKEN_EOF, NULL};
+	default:
+		strncpy(buffer, input+lexer_index, 5);
+		if (!strncmp(buffer, "true", 4)) {
+			lexer_index += 4;
+			return (Token){TOKEN_TRUE, strdup("true")};
+		} else if (!strncmp(buffer, "false", 5)) {
+			lexer_index += 5;
+			return (Token){TOKEN_FALSE, strdup("false")};
+		} else if (!strncmp(buffer, "null", 4)) {
+			lexer_index += 4;
+			return (Token){TOKEN_NULL, strdup("null")};
+		} else if (isdigit(c) || c == '-') {
+			return parse_number(input);
+		} else if (c == '\n') {
+			return (Token){TOKEN_NL, NULL};
+		} else {
+			return (Token){TOKEN_ERR, NULL};
 		}
 	}
 }
@@ -139,7 +140,7 @@ int main(int argc, char** argv) {
 		if (input[strlen(input) - 1] != '\n' && !feof(fp)) {
 			fprintf(stderr, "Error: Line too long for buffer.\n");
 		}
-		while ((token = get_next_token(input)).type != TOKEN_NL) {
+		while (((token = get_next_token(input)).type != TOKEN_NL) && token.type != TOKEN_EOF) {
 			if (token.type == TOKEN_ERR) {
 				fprintf(stderr, "Error: %s\n", token.value);
 				free_token(&token);
