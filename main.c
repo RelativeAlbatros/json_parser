@@ -3,6 +3,8 @@
 #include <string.h>
 #include <ctype.h>
 
+#define BUF_SIZE 256
+
 static int lexer_index = 0;
 
 typedef enum {
@@ -17,6 +19,7 @@ typedef enum {
 	TOKEN_TRUE,
 	TOKEN_FALSE,
 	TOKEN_NULL,
+	TOKEN_NL,
 	TOKEN_ERR,
 	TOKEN_EOF
 } TokenType;
@@ -55,11 +58,11 @@ Token parse_number(const char* input) {
 
 Token get_next_token(const char* input) {
 	char buffer[5];
+	int c;
 
-	int c = input[lexer_index];
 	int d = strlen(input);
 	while (lexer_index < strlen(input)) {
-		switch (c) {
+		switch (c = input[lexer_index]) {
 		case '\"':
 			lexer_index++;
 			return parse_string(input);
@@ -87,19 +90,21 @@ Token get_next_token(const char* input) {
 		default:
 			strncpy(buffer, input+lexer_index, 5);
 			if (!strncmp(buffer, "true", 4)) {
-				lexer_index += 3;
+				lexer_index += 4;
 				return (Token){TOKEN_TRUE, strdup("true")};
 			} else if (!strncmp(buffer, "false", 5)) {
-				lexer_index += 4;
+				lexer_index += 5;
 				return (Token){TOKEN_FALSE, strdup("false")};
 			} else if (!strncmp(buffer, "null", 4)) {
-				lexer_index += 3;
+				lexer_index += 4;
 				return (Token){TOKEN_NULL, strdup("null")};
 			} else if (isdigit(c) || c == '-') {
 				return parse_number(input);
-			} else if (c == ' ' || c == '\n') {
+			} else if (c == ' ' || c == '\t') {
 				lexer_index++;
 				continue;
+			} else if (c == '\n') {
+				return (Token){TOKEN_NL, NULL};
 			} else {
 				return (Token){TOKEN_ERR, NULL};
 			}
@@ -114,16 +119,27 @@ void free_token(Token* token) {
 }
 
 int main(int argc, char** argv) {
-	FILE* fp = fopen("test.json", "r");
-	if (fp == NULL) {
-		fprintf(stderr, "Error: opening file\n");
-		return -1;
+	FILE* fp;
+	
+	if (argc == 1) {
+		fprintf(stderr, "Error: which file?\n");
+		exit(-1);
+	} else {
+		fp = fopen(argv[1], "r");
+		if (fp == NULL) {
+			fprintf(stderr, "Error: opening file\n");
+			exit(-1);
+		}
 	}
-	char input[256];
-	Token token;
+	char* input = malloc(BUF_SIZE);
+	Token token = {TOKEN_NULL, NULL};
 
-	while ((fgets(input, 256, fp)) != NULL) {
-		while ((token = get_next_token(input)).type != TOKEN_EOF) {
+	while ((fgets(input, BUF_SIZE, fp)) != NULL) {
+		lexer_index = 0;
+		if (input[strlen(input) - 1] != '\n' && !feof(fp)) {
+			fprintf(stderr, "Error: Line too long for buffer.\n");
+		}
+		while ((token = get_next_token(input)).type != TOKEN_NL) {
 			if (token.type == TOKEN_ERR) {
 				fprintf(stderr, "Error: %s\n", token.value);
 				free_token(&token);
@@ -131,11 +147,17 @@ int main(int argc, char** argv) {
 			} else if (token.type == TOKEN_EOF) {
 				break;
 			}
-			printf("Token type: %d, value: %s\n", token.type, token.value);
-			free_token(&token);
+			printf("Token type: %d", token.type);
+			if (token.value) {
+				printf(" value: %s\n", token.value);
+			} else {
+				printf("\n");
+			}
 		}
+		free_token(&token);
 	}
 
+	free(input);
 	fclose(fp);
 	return 0;
 }
