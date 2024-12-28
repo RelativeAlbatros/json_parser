@@ -9,15 +9,15 @@
 #define BUF_SIZE 256
 #define OBJ_INIT_CAP 24
 
-static size_t lexer_index = 0;
-
 typedef enum {
+    // delimiters
 	TOKEN_CURL_OPEN,
 	TOKEN_CURL_CLOSE,
 	TOKEN_BRACKET_OPEN,
 	TOKEN_BRACKET_CLOSE,
 	TOKEN_COMMA,
 	TOKEN_COLON,
+    // primite values
 	TOKEN_STRING,
 	TOKEN_NUMBER,
 	TOKEN_TRUE,
@@ -38,19 +38,45 @@ typedef struct {
 	size_t capacity; // allocated memory
 } TokenArray;
 
+typedef enum {
+    NODE_OBJECT,
+    NODE_ARRAY,
+    NODE_STRING,
+    NODE_NUMBER,
+    NODE_BOOL,
+    NODE_NULL
+} JsonNodeType;
+
+typedef struct JsonNode {
+    JsonNodeType type;
+    char* key;              // For object properties
+    union {
+        struct JsonNode** children; // For objects and arrays
+        char* string_value;
+        double number_value;
+        bool bool_value;
+    } value;
+    size_t child_count;
+} JsonNode;
+
 void die(const char*fmt, ...);
-Token* initToken(TokenType type, const char* value);
+Token* init_token(TokenType type, const char* value);
 void free_token(Token* token);
 TokenArray* initTokenArray(size_t initial_capacity);
 void addToken(TokenArray* arr, const Token token);
 Token* getToken(const TokenArray* arr, size_t index);
 void removeToken(TokenArray* arr, size_t index);
 void freeTokenArray(TokenArray* arr);
-Token* parse_string(const char* input);
-Token* parse_number(const char* input);
-Token* get_next_token(const char* input);
-TokenArray* get_next_object(const char* input);
-bool objsyntacticchecker(TokenArray* obj);
+JsonNode* initJsonNode(JsonNodeType type, const char* key);
+void free_json_node(JsonNode* node);
+// lexer
+Token* next_string(const char* json, size_t index);
+Token* next_number(const char* json, size_t index);
+Token* next_token(const char* json, size_t index);
+// parser
+JsonNode* parse_object();
+JsonNode* parse_array();
+JsonNode* parse_value();
 
 void die(const char *fmt, ...) {
 	va_list ap;
@@ -69,7 +95,7 @@ void die(const char *fmt, ...) {
 	exit(1);
 }
 
-Token* initToken(TokenType type, const char* value) {
+Token* init_token(TokenType type, const char* value) {
     Token* token = malloc(sizeof(*token));
     token->type = type;
     token->value = strdup(value);
@@ -124,108 +150,123 @@ void freeTokenArray(TokenArray *arr) {
     free(arr);
 }
 
-Token* parse_string(const char* input) {
-	char* string_value = strdup("");
-	while (input[lexer_index++] != '\"') {
-		// append on the fly const char* from char to string_value
-		strcat(string_value, (char[2]){input[lexer_index-1], '\0'}); 
+JsonNode* initJsonNode(JsonNodeType type, const char* key) {
+	JsonNode* node = malloc(sizeof(*node));
+	node->type = type;
+	node->key = strdup(key);
+	node->child_count = 0;
+	switch (type) {
+		case NODE_OBJECT:
+		case NODE_ARRAY:
+			node->value.children = NULL;
+			break;
+		case NODE_STRING:
+			node->value.string_value = NULL;
+			break;
+		case NODE_NUMBER:
+			node->value.number_value = 0;
+			break;
+		case NODE_BOOL:
+			node->value.bool_value = false;
+			break;
+		case NODE_NULL:
+			break;
 	}
 
-	return initToken(TOKEN_STRING, string_value);
+	return node;
 }
 
-Token* parse_number(const char* input) {
-	int is_negative = (input[lexer_index]=='-') ? 1 : 0;
+void free_json_node(JsonNode* node) {
+	if (!node) return;
+	if (node->type == NODE_OBJECT || node->type == NODE_ARRAY) {
+		for (size_t i = 0; i < node->child_count; i++) {
+			free_json_node(node->value.children[i]);
+		}
+		free(node->value.children);
+	} else if (node->type == NODE_STRING) {
+		free(node->value.string_value);
+	}
+	free(node->key);
+	free(node);
+}
+
+Token* next_string(const char* json, size_t index) {
+	char* string_value = strdup("");
+	while (json[index++] != '\"') {
+		// append on the fly const char* from char to string_value
+		strcat(string_value, (char[2]){json[index-1], '\0'}); 
+	}
+
+	return init_token(TOKEN_STRING, string_value);
+}
+
+Token* next_number(const char* json, size_t index) {
+	int is_negative = (json[index]=='-') ? 1 : 0;
 	char* num_value = strdup("");
 
-	lexer_index += is_negative;
-	while (isdigit(input[lexer_index++])) {
-		strcat(num_value, (char[2]){input[lexer_index-1], '\0'});
+	index += is_negative;
+	while (isdigit(json[index++])) {
+		strcat(num_value, (char[2]){json[index-1], '\0'});
 	}
 
-	return initToken(TOKEN_NUMBER, num_value);
+	return init_token(TOKEN_NUMBER, num_value);
 }
 
-Token* get_next_token(const char* input) {
+Token* next_token(const char* json, size_t index) {
 	char buffer[5];
 	int c;
 
-	if (lexer_index >= strlen(input)) {
-		return initToken(TOKEN_EOF, NULL);
+	if (index >= strlen(json)) {
+		return init_token(TOKEN_EOF, NULL);
 	}
 	// skip spaces and tabs
-	while (input[lexer_index] == ' ' || input[lexer_index] == '\t') {
-		lexer_index++;
+	while (json[index] == ' ' || json[index] == '\t') {
+		index++;
 	}
-	switch (c = input[lexer_index]) {
+	switch (c = json[index]) {
 	case '\"':
-		lexer_index++;
-		return parse_string(input);
+		index++;
+		return next_string(json, index);
 	case '{':
-		lexer_index++;
-		return initToken(TOKEN_CURL_OPEN, strdup("{"));
+		index++;
+		return init_token(TOKEN_CURL_OPEN, strdup("{"));
 	case '}':
-		lexer_index++;
-		return initToken(TOKEN_CURL_CLOSE, strdup("}"));
+		index++;
+		return init_token(TOKEN_CURL_CLOSE, strdup("}"));
 	case '[':
-		lexer_index++;
-		return initToken(TOKEN_BRACKET_OPEN, strdup("["));
+		index++;
+		return init_token(TOKEN_BRACKET_OPEN, strdup("["));
 	case ']':
-		lexer_index++;
-		return initToken(TOKEN_BRACKET_CLOSE, strdup("]"));
+		index++;
+		return init_token(TOKEN_BRACKET_CLOSE, strdup("]"));
 	case ',':
-		lexer_index++;
-		return initToken(TOKEN_COMMA, strdup(","));
+		index++;
+		return init_token(TOKEN_COMMA, strdup(","));
 	case ':':
-		lexer_index++;
-		return initToken(TOKEN_COLON, strdup(":"));
+		index++;
+		return init_token(TOKEN_COLON, strdup(":"));
 	case '\0':
-		lexer_index++;
-		return initToken(TOKEN_EOF, NULL);
+		index++;
+		return init_token(TOKEN_EOF, NULL);
 	default:
-		strncpy(buffer, input+lexer_index, 5);
+		strncpy(buffer, json+index, 5);
 		if (!strncmp(buffer, "true", 4)) {
-			lexer_index += 4;
-			return initToken(TOKEN_TRUE, strdup("true"));
+			index += 4;
+			return init_token(TOKEN_TRUE, strdup("true"));
 		} else if (!strncmp(buffer, "false", 5)) {
-			lexer_index += 5;
-			return initToken(TOKEN_FALSE, strdup("false"));
+			index += 5;
+			return init_token(TOKEN_FALSE, strdup("false"));
 		} else if (!strncmp(buffer, "null", 4)) {
-			lexer_index += 4;
-			return initToken(TOKEN_NULL, strdup("null"));
+			index += 4;
+			return init_token(TOKEN_NULL, strdup("null"));
 		} else if (isdigit(c) || c == '-') {
-			return parse_number(input);
+			return next_number(json, index);
 		} else if (c == '\n') {
-			return initToken(TOKEN_NL, NULL);
+			return init_token(TOKEN_NL, NULL);
 		} else {
             return NULL;
 		}
 	}
-}
-
-TokenArray* get_next_object(const char* input) {
-	TokenArray* obj = initTokenArray(OBJ_INIT_CAP);
-	Token* token;
-	while ((token = get_next_token(input))->type != TOKEN_CURL_CLOSE) {
-		if (token->type == TOKEN_EOF) {
-			die("Error: '}' missing\n");
-			exit(-1);
-		} else if (token->type != TOKEN_NL) {
-			addToken(obj, *token);
-		}
-	}
-	return obj;
-}
-
-bool objsyntacticchecker(TokenArray* obj) {
-	for (size_t i = 0; i < obj->size; i++) {
-		if (getToken(obj, i)->type == TOKEN_CURL_OPEN) {
-			assert(getToken(obj, i+1)->type == TOKEN_STRING);
-		} else if (getToken(obj, i)->type == TOKEN_STRING) {
-			assert(getToken(obj, i+1)->type == TOKEN_COLON);
-        }
-	}
-	return true;
 }
 
 int main(int argc, char** argv) {
@@ -241,15 +282,16 @@ int main(int argc, char** argv) {
 			exit(-1);
 		}
 	}
-	char* input = malloc(BUF_SIZE);
+	char* json = malloc(BUF_SIZE);
 	Token* token = NULL;
+	size_t lexer_index = 0;
 
-	while ((fgets(input, BUF_SIZE, fp)) != NULL) {
+	while ((fgets(json, BUF_SIZE, fp)) != NULL) {
 		lexer_index = 0;
-		if (input[strlen(input) - 1] != '\n' && !feof(fp)) {
+		if (json[strlen(json) - 1] != '\n' && !feof(fp)) {
 			die("Error: Line too long for buffer.\n");
 		}
-		while (((token = get_next_token(input))->type != TOKEN_NL) && token->type != TOKEN_EOF) {
+		while (((token = next_token(json, lexer_index))->type != TOKEN_NL) && token->type != TOKEN_EOF) {
 			if (token == NULL) {
 				die("Error: %s\n", token->value);
 				free_token(token);
@@ -267,7 +309,7 @@ int main(int argc, char** argv) {
 		free_token(token);
 	}
 
-	free(input);
+	free(json);
 	fclose(fp);
 	return 0;
 }
