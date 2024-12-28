@@ -1,20 +1,23 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdbool.h>
+#include <assert.h>
 #include <ctype.h>
 
 #define BUF_SIZE 256
+#define OBJ_INIT_CAP 24
 
-static int lexer_index = 0;
+static size_t lexer_index = 0;
 
 typedef enum {
-	TOKEN_STRING,
 	TOKEN_CURL_OPEN,
 	TOKEN_CURL_CLOSE,
 	TOKEN_BRACKET_OPEN,
 	TOKEN_BRACKET_CLOSE,
 	TOKEN_COMMA,
 	TOKEN_COLON,
+	TOKEN_STRING,
 	TOKEN_NUMBER,
 	TOKEN_TRUE,
 	TOKEN_FALSE,
@@ -29,10 +32,71 @@ typedef struct {
 	char* value;
 } Token;
 
+typedef struct {
+	Token* data;
+	size_t size; // number of elements
+	size_t capacity; // allocated memory
+} TokenArray;
+
+void free_token(Token* token);
+TokenArray* initTokenArray(size_t initial_capacity);
+void addToken(TokenArray* arr, Token new_token);
+Token* getToken(TokenArray* arr, size_t index);
+void removeToken(TokenArray* arr, size_t index);
+void freeTokenArray(TokenArray* arr);
 Token parse_string(const char* input);
 Token parse_number(const char* input);
 Token get_next_token(const char* input);
-void free_token(Token* token);
+TokenArray* get_next_object(const char* input);
+bool objsyntacticchecker(TokenArray* obj);
+
+void free_token(Token* token) {
+	token->type = 0;
+	if (token->value) {
+		free(token->value);
+	}
+}
+
+TokenArray* initTokenArray(size_t initial_capacity) {
+    TokenArray* arr = malloc(sizeof(*arr));
+    arr->data = (Token *)malloc(initial_capacity * sizeof(Token));
+    arr->size = 0;
+	arr->capacity = initial_capacity;
+    return arr;
+}
+
+void addToken(TokenArray *arr, Token new_token) {
+    if (arr->size == arr->capacity) {
+        arr->capacity *= 2; // Double the capacity
+        arr->data = (Token *)realloc(arr->data, arr->capacity * sizeof(Token));
+    }
+    arr->data[arr->size++] = new_token;
+}
+
+Token* getToken(TokenArray *arr, size_t index) {
+    if (index >= arr->size) {
+        fprintf(stderr, "Error: index out of bounds\n");
+        exit(EXIT_FAILURE);
+    }
+    return &(arr->data[index]);
+}
+
+void removeToken(TokenArray *arr, size_t index) {
+    if (index >= arr->size) {
+        fprintf(stderr, "Error: index out of bounds\n");
+    }
+    for (size_t i = index; i < arr->size - 1; i++) {
+        arr->data[i] = arr->data[i + 1];
+    }
+    arr->size--;
+}
+
+void freeTokenArray(TokenArray *arr) {
+    free(arr->data);
+    arr->size = 0;
+    arr->capacity = 0;
+    free(arr);
+}
 
 Token parse_string(const char* input) {
 	char* string_value = strdup("");
@@ -113,10 +177,30 @@ Token get_next_token(const char* input) {
 	}
 }
 
-void free_token(Token* token) {
-	if (token->value) {
-		free(token->value);
+TokenArray* get_next_object(const char* input) {
+	TokenArray* obj = initTokenArray(OBJ_INIT_CAP);
+	Token token;
+	while ((token = get_next_token(input)).type != TOKEN_CURL_CLOSE) {
+		if (token.type == TOKEN_EOF) {
+			fprintf(stderr, "Error: '}' missing\n");
+			exit(-1);
+		}
+		if (token.type != TOKEN_NL) {
+			addToken(obj, token);
+		}
 	}
+	return obj;
+}
+
+bool objsyntacticchecker(TokenArray* obj) {
+	for (size_t i=0; i<obj->size; i++) {
+		if (getToken(obj, i)->type == TOKEN_CURL_OPEN) {
+			assert(getToken(obj, i+1)->type == TOKEN_STRING);
+		} else if (getToken(obj, i)->type == TOKEN_STRING) {
+			assert(getToken(obj, i+1)->type == TOKEN_COLON);
+        }
+	}
+	return 0;
 }
 
 int main(int argc, char** argv) {
