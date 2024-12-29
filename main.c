@@ -270,7 +270,8 @@ Token* next_token(const char* json, size_t* index) {
 		} else if (isdigit(c) || c == '-') {
 			return next_number(json, index);
 		} else {
-            return NULL;
+			die("error reading token: %s", json+(*index));
+			return NULL;
 		}
 	}
 }
@@ -369,7 +370,7 @@ TokenArray* tokenize(const char* json) {
 	Token* token = init_token(TOKEN_NULL, NULL);
 	TokenArray* arr = init_token_array(ARR_INIT_SIZE);
 
-	while ((token = next_token(json, &lexer_index)) != NULL) {
+	while ((token = next_token(json, &lexer_index))->type != TOKEN_EOF) {
 		add_token(arr, token);
 		free(token);
 	}
