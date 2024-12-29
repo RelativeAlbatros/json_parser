@@ -195,10 +195,11 @@ void free_json_node(JsonNode* node) {
 }
 
 Token* next_string(const char* json, size_t* index) {
-	char* string_value = strdup("");
-	while (json[*(index)++] != '\"') {
+	char* string_value = malloc(BUF_INIT_SIZE);
+	while (json[*index] != '\"') {
 		// append on the fly const char* from char to string_value
-		strcat(string_value, (char[2]){json[*index-1], '\0'}); 
+		strcat(string_value, (char[2]){json[*index], '\0'}); 
+		(*index)++;
 	}
 
 	return init_token(TOKEN_STRING, string_value);
@@ -206,13 +207,15 @@ Token* next_string(const char* json, size_t* index) {
 
 Token* next_number(const char* json, size_t* index) {
 	int is_negative = (json[*index]=='-') ? 1 : 0;
-	char* num_value = strdup("");
+	char* num_value = malloc(BUF_INIT_SIZE);
 
 	index += is_negative;
-	while (isdigit(json[(*index)++])) {
+	while (isdigit(json[*index])) {
 		strcat(num_value, (char[2]){json[*index-1], '\0'});
+		(*index)++;
 	}
 
+	(*index)++; // skip closing "
 	return init_token(TOKEN_NUMBER, num_value);
 }
 
@@ -272,7 +275,7 @@ Token* next_token(const char* json, size_t* index) {
 }
 
 bool token_is_value(Token* token) {
-	return (0 <= token->type && token->type <= 6);
+	return (2 <= token->type && token->type <= 6);
 }
 
 void syntax_checker(TokenArray* arr) {
@@ -389,6 +392,8 @@ TokenArray* tokenize(const char* json) {
 	while ((token = next_token(json, &lexer_index))->type != TOKEN_EOF) {
 		add_token(arr, token);
 	}
+	if (arr->size == 0)
+		die("empty json text");
 
 	free(token);
 	return arr;
