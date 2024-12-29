@@ -6,24 +6,21 @@
 #include <stdarg.h>
 #include <ctype.h>
 
-#define BUF_SIZE 256
-#define ARR_INIT_SIZ 24
+#define BUF_INIT_SIZE 256
+#define ARR_INIT_SIZE 24
 
 typedef enum {
-    // delimiters
 	TOKEN_CURL_OPEN,
-	TOKEN_CURL_CLOSE,
 	TOKEN_BRACKET_OPEN,
-	TOKEN_BRACKET_CLOSE,
-	TOKEN_COMMA,
-	TOKEN_COLON,
-    // primite values
 	TOKEN_STRING,
 	TOKEN_NUMBER,
 	TOKEN_TRUE,
 	TOKEN_FALSE,
 	TOKEN_NULL,
-	TOKEN_NL,
+	TOKEN_CURL_CLOSE,
+	TOKEN_BRACKET_CLOSE,
+	TOKEN_COMMA,
+	TOKEN_COLON,
 	TOKEN_EOF
 } TokenType;
 
@@ -74,10 +71,13 @@ void free_json_node(JsonNode* node);
 Token* next_string(const char* json, size_t* index);
 Token* next_number(const char* json, size_t* index);
 Token* next_token(const char* json, size_t* index);
+// syntax_checker
+bool token_is_value(Token* token);
+void syntax_checker(TokenArray* arr);
 // parser
-JsonNode* parse_object(TokenArray* arr);
-JsonNode* parse_array(TokenArray* arr);
-JsonNode* parse_value(TokenArray* arr);
+JsonNode* parse(TokenArray* arr, size_t start, JsonNodeType);
+TokenArray* tokenize(const char* json);
+void dump_file(FILE* fp, char* buffer, size_t size);
 
 void die(const char *fmt, ...) {
 	va_list ap;
@@ -99,7 +99,7 @@ void die(const char *fmt, ...) {
 Token* init_token(TokenType type, const char* value) {
     Token* token = malloc(sizeof(*token));
     token->type = type;
-    token->value = strdup(value);
+    token->value = value ? strdup(value) : NULL;
     return token;
 }
 
@@ -121,7 +121,7 @@ TokenArray* init_token_array(size_t initial_capacity) {
 
 void cp_token(Token* dst, const Token* src) {
 	dst->type = src->type;
-	dst->value = strdup(src->value);
+	dst->value = src->value ? strdup(src->value) : NULL;
 }
 
 void add_token(TokenArray *arr, const Token* token) {
@@ -129,7 +129,8 @@ void add_token(TokenArray *arr, const Token* token) {
         arr->capacity *= 2; // Double the capacity
         arr->tokens = (Token **)realloc(arr->tokens, arr->capacity * sizeof(Token*));
     }
-    cp_token(arr->tokens[arr->size++], token);
+	arr->tokens[++(arr->size)] = init_token(TOKEN_NULL, NULL);
+    cp_token(arr->tokens[arr->size], token);
 }
 
 void remove_token(TokenArray *arr, size_t index) {
@@ -152,7 +153,7 @@ void free_token_array(TokenArray *arr) {
 JsonNode* init_json_node(JsonNodeType type, const char* key) {
 	JsonNode* node = malloc(sizeof(*node));
 	node->type = type;
-	node->key = strdup(key);
+	node->key =  key ? strdup(key) : NULL ;
 	node->child_count = 0;
 	switch (type) {
 		case NODE_OBJECT:
@@ -214,7 +215,7 @@ Token* next_number(const char* json, size_t* index) {
 Token* next_token(const char* json, size_t* index) {
 	char buffer[5];
 	int c;
-	TokenArray* arr = init_token_array(ARR_INIT_SIZ);
+	TokenArray* arr = init_token_array(ARR_INIT_SIZE);
 	Token* token = init_token(TOKEN_NULL, NULL);
 
 	if (*index >= strlen(json)) {
@@ -233,7 +234,6 @@ Token* next_token(const char* json, size_t* index) {
 		while ((token = next_token(json, index))->type != TOKEN_CURL_CLOSE) {
 			add_token(arr, token);
 		}
-		parse_object(arr);
 		return init_token(TOKEN_CURL_OPEN, strdup("{"));
 	case '}':
 		(*index)++;
@@ -269,83 +269,142 @@ Token* next_token(const char* json, size_t* index) {
 			return init_token(TOKEN_NULL, strdup("null"));
 		} else if (isdigit(c) || c == '-') {
 			return next_number(json, index);
-		} else if (c == '\n') {
-			return init_token(TOKEN_NL, NULL);
 		} else {
             return NULL;
 		}
 	}
 }
 
-// TODO: complete
-/* JsonNode* parse_object(TokenArray* arr, size_t i) {
-	JsonNode* node = init_json_node(NODE_OBJECT, arr->tokens[0]->value);
+bool token_is_value(Token* token) {
+	return (0 <= token->type && token->type <= 6);
+}
+
+void syntax_checker(TokenArray* arr) {
+	Token* token = init_token(TOKEN_NULL, NULL);
+	bool in_object, in_array = false;
 	for (size_t i = 0; i < arr->size; i++) {
-		switch (arr->tokens[i]->type) {
+		token = arr->tokens[i];
+		if (token->type == TOKEN_CURL_OPEN && (token+1)->type != TOKEN_STRING) {
+			in_array = false;
+			in_object = true;
+			die("missing key after '{'");
+		} else if (token->type == TOKEN_BRACKET_OPEN && !token_is_value(token+1)) {
+			in_array = true;
+			in_object = false;
+			die("missing value at entry of array");
+		} else if (!in_array && !in_object) {
+			die("error");
+		}
+		if (in_object) {
+			if (token->type == TOKEN_STRING && (token+1)->type != TOKEN_COLON) {
+				die("missing ':' after key value");
+			} else if (token->type == TOKEN_COLON && !token_is_value(token)) {
+				die("missing value after ':'");
+			} else if (token_is_value(token) && ((token+1)->type != TOKEN_COMMA || (token+1)->type != TOKEN_CURL_CLOSE)) {
+				die("unexpected end of object");
+			} else if (token->type == TOKEN_COMMA && (token+1)->type != TOKEN_STRING) {
+				die("missing key after ','");
+			}
+		} else if (in_array) {
+			if (token_is_value(token) && (token+1)->type != TOKEN_COMMA) {
+				die("missing value after ','");
+			}
+		} 
+	}
+}
+
+JsonNode* parse(TokenArray* arr, size_t start, JsonNodeType type) {
+	JsonNode* node = init_json_node(type, NULL);
+	Token* token;
+
+	syntax_checker(arr);
+
+	for (size_t i = start; i < arr->size; i++) {
+		token = arr->tokens[i];
+		switch (token->type) {
 			case TOKEN_STRING:
+				if (node->key == NULL) {
+					node->key = strdup(token->value);
+				} else {
+					node->value.string_value = strdup(token->value);
+				}
 				break;
+			case TOKEN_NUMBER:
+				node->value.number_value = atoi(token->value);
+				break;
+			case TOKEN_TRUE:
+				node->value.bool_value = true;
+				break;
+			case TOKEN_FALSE:
+				node->value.bool_value = false;
+				break;
+			case TOKEN_NULL:
+				node->value.string_value = NULL;
+				break;
+			// child array
 			case TOKEN_BRACKET_OPEN:
-				node->value.children[node->child_count] = parse_array(arr, i);
+				node->value.children[node->child_count++] = parse(arr, i, NODE_ARRAY);
 				node->child_count++;
 				break;
+			// child object
 			case TOKEN_CURL_OPEN:
-				node->value.children[node->child_count] = parse_object(arr, i);
-			default:
+				node->value.children[node->child_count++] = parse(arr, i, NODE_OBJECT);
 				break;
+			case TOKEN_CURL_CLOSE:
+			case TOKEN_BRACKET_CLOSE:
+				return node;
+			case TOKEN_COLON:
+			case TOKEN_COMMA:
+			case TOKEN_EOF:
+				break;
+			default:
+				return NULL;
 		}
 	}
 	return node;
 }
 
-JsonNode* parse_array(TokenArray* arr) {
+TokenArray* tokenize(const char* json) {
+	size_t lexer_index = 0;
+	Token* token = init_token(TOKEN_NULL, NULL);
+	TokenArray* arr = init_token_array(ARR_INIT_SIZE);
+
+	while ((token = next_token(json, &lexer_index)) != NULL) {
+		add_token(arr, token);
+		free(token);
+	}
+
+	return arr;
 }
 
-JsonNode* parse_value(TokenArray* arr) {
+void dump_file(FILE* fp, char* buffer, size_t size) {
+	char c;
 
+	while ((c = getc(fp)) != EOF) {
+		if (strlen(buffer) >= size) {
+			buffer = realloc(buffer, 2 * size);
+		}
+		if (c != '\n' && c != ' ' && c != '\t') {
+			strncat(buffer, (char[2]){c, '\0'}, size);
+		}
+	}
 }
-*/
 
 int main(int argc, char** argv) {
 	FILE* fp;
+	char* buffer = malloc(BUF_INIT_SIZE);
 	
-	if (argc == 1) {
+	if (argc == 1)
 		die("Error: which file?\n");
-		exit(-1);
-	} else {
-		fp = fopen(argv[1], "r");
-		if (fp == NULL) {
-			die("Error: opening file\n");
-			exit(-1);
-		}
-	}
-	char* json = malloc(BUF_SIZE);
-	Token* token = NULL;
-	size_t lexer_index = 0;
 
-	while ((fgets(json, BUF_SIZE, fp)) != NULL) {
-		lexer_index = 0;
-		if (json[strlen(json) - 1] != '\n' && !feof(fp)) {
-			die("Error: Line too long for buffer.\n");
-		}
-		while (((token = next_token(json, &lexer_index))->type != TOKEN_NL) && token->type != TOKEN_EOF) {
-			if (token == NULL) {
-				die("Error: %s\n", token->value);
-				free_token(token);
-				break;
-			} else if (token->type == TOKEN_EOF) {
-				break;
-			}
-			printf("Token type: %d", token->type);
-			if (token->value) {
-				printf(" value: %s\n", token->value);
-			} else {
-				printf("\n");
-			}
-		}
-		free_token(token);
+	fp = fopen(argv[1], "r");
+	if (fp == NULL) {
+		die("Error: opening file %s\n", argv[1]);
 	}
 
-	free(json);
+	dump_file(fp, buffer, BUF_INIT_SIZE);
+	TokenArray* arr = tokenize(buffer);
+
 	fclose(fp);
 	return 0;
 }
