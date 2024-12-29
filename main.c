@@ -27,6 +27,7 @@ typedef enum {
 typedef struct {
 	TokenType type;
 	char* value;
+	bool is_value;
 } Token;
 
 typedef struct {
@@ -72,7 +73,6 @@ Token* next_string(const char* json, size_t* index);
 Token* next_number(const char* json, size_t* index);
 Token* next_token(const char* json, size_t* index);
 // syntax_checker
-bool token_is_value(Token* token);
 void syntax_checker(TokenArray* arr);
 // parser
 JsonNode* parse(TokenArray* arr, size_t start);
@@ -100,6 +100,7 @@ Token* init_token(TokenType type, const char* value) {
     Token* token = malloc(sizeof(*token));
     token->type = type;
     token->value = value ? strdup(value) : NULL;
+	token->is_value = false;
     return token;
 }
 
@@ -202,6 +203,7 @@ Token* next_string(const char* json, size_t* index) {
 		(*index)++;
 	}
 
+	(*index)++; // skip closing "
 	return init_token(TOKEN_STRING, string_value);
 }
 
@@ -215,7 +217,6 @@ Token* next_number(const char* json, size_t* index) {
 		(*index)++;
 	}
 
-	(*index)++; // skip closing "
 	return init_token(TOKEN_NUMBER, num_value);
 }
 
@@ -274,18 +275,18 @@ Token* next_token(const char* json, size_t* index) {
 	}
 }
 
-bool token_is_value(Token* token) {
-	return (2 <= token->type && token->type <= 6);
-}
-
 void syntax_checker(TokenArray* arr) {
 	Token* token;
 	Token* nxt_token;
-	bool in_object, in_array = false;
+	bool in_object = false, in_array = false;
 
 	for (size_t i = 0; i < arr->size-1; i++) {
 		token = arr->tokens[i];
 		nxt_token = arr->tokens[i+1];
+
+		if (token == NULL || nxt_token == NULL) {
+			die("Syntax error: missing token");
+		}
 
 		if (token->type == TOKEN_CURL_OPEN) {
 			in_array = false;
@@ -293,30 +294,53 @@ void syntax_checker(TokenArray* arr) {
 		} else if (token->type == TOKEN_BRACKET_OPEN) {
 			in_array = true;
 			in_object = false;
+		} else if (token->type == TOKEN_BRACKET_CLOSE || token->type == TOKEN_CURL_CLOSE) {
+			in_array = false;
+			in_object = false;
 		}
 
-		if (token->type == TOKEN_CURL_OPEN && (nxt_token->type != TOKEN_STRING && nxt_token->type != TOKEN_CURL_CLOSE)) {
-			die("missing key after '{'");
-		} else if (token->type == TOKEN_BRACKET_OPEN && !token_is_value(nxt_token)) {
-			die("missing value at entry of array");
-		} else if (!in_array && !in_object) {
-			die("missign object or array");
+		if (token->type == TOKEN_CURL_OPEN) {
+			if ((nxt_token->type != TOKEN_STRING && nxt_token->type != TOKEN_CURL_CLOSE)) {
+				die("Syntax error: missing key after '{'");
+			}
+		} else if (token->type == TOKEN_BRACKET_OPEN) {
+			if (token->is_value) {
+				die("Syntax error: missing value at entry of array");
+			}
 		}
 		if (in_object) {
-			if (token->type == TOKEN_STRING && nxt_token->type != TOKEN_COLON) {
-				die("missing ':' after key value");
-			} else if (token->type == TOKEN_COLON && !token_is_value(token)) {
-				die("missing value after ':'");
-			} else if (token_is_value(token) && (nxt_token->type != TOKEN_COMMA && nxt_token->type != TOKEN_CURL_CLOSE)) {
-				die("unexpected end of object");
-			} else if (token->type == TOKEN_COMMA && nxt_token->type != TOKEN_STRING) {
-				die("missing key after ','");
+			if (token->type == TOKEN_STRING && !token->is_value) {
+				if (nxt_token->type != TOKEN_COLON) {
+					die("Syntax error: missing ':' after key");
+				} else if (0 <= arr->tokens[i+2]->type && arr->tokens[i+2]->type <= 6) {
+					// check if primitive value or object or array
+					// in which case it is a value
+					arr->tokens[i+2]->is_value = true;
+				}
+			} else if (token->type == TOKEN_COLON) {
+				if (!nxt_token->is_value) {
+					die("Syntax error: missing value after ':'");
+				}
+			} else if (token->is_value) {
+				if (nxt_token->type != TOKEN_COMMA && nxt_token->type != TOKEN_CURL_CLOSE) {
+					die("Syntax error: unexpected end of object");
+				}
+			} else if (token->type == TOKEN_COMMA) {
+				if (nxt_token->type != TOKEN_STRING) {
+					die("Syntax error: missing key after ','");
+				}
 			}
 		} else if (in_array) {
-			if (token_is_value(token) && nxt_token->type != TOKEN_COMMA) {
-				die("missing value after ','");
+			if (token->is_value) {
+				if (nxt_token->type != TOKEN_COMMA && nxt_token->type != TOKEN_BRACKET_CLOSE) {
+					die("Syntax error: missing ',' after value");
+				}
 			}
 		} 
+		if (arr->tokens[arr->size-1]->type !=TOKEN_CURL_CLOSE &&
+				arr->tokens[arr->size-1]->type !=TOKEN_BRACKET_CLOSE) {
+			die("Syntax error: unclosed object or array");
+		}
 	}
 }
 
@@ -433,4 +457,6 @@ int main(int argc, char** argv) {
 	free_json_node(parsed_json);
 
 	fclose(fp);
+	printf("all good!\n");
+	return 0;
 }
