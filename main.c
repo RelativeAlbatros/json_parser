@@ -269,7 +269,11 @@ Token* next_token(const char* json, size_t* index) {
 		} else if (isdigit(c) || c == '-') {
 			return next_number(json, index);
 		} else {
-			die("error reading token: %s", json+(*index));
+			char* buff = malloc(BUF_INIT_SIZE);
+			while(isalpha(json[*index])) {
+				strcat(buff, (char[2]){json[(*index)++], '\0'});
+			}
+			die("error reading token: %s", buff);
 			return NULL;
 		}
 	}
@@ -321,7 +325,7 @@ void syntax_checker(TokenArray* arr) {
 				if (!nxt_token->is_value) {
 					die("Syntax error: missing value after ':'");
 				}
-			} else if (token->is_value) {
+			} else if (token->is_value && (token->type != TOKEN_CURL_OPEN && token->type != TOKEN_BRACKET_OPEN)) {
 				if (nxt_token->type != TOKEN_COMMA && nxt_token->type != TOKEN_CURL_CLOSE) {
 					die("Syntax error: unexpected end of object");
 				}
